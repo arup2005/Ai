@@ -135,7 +135,7 @@ def ask():
         }
 
         # 🔊 ELEVENLABS VOICE ID (Rachel)
-        VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"
+        VOICE_ID = "K24eC7JpUgk8zMtQYrpV"
 
         audio_path = ""
 
