@@ -6,90 +6,58 @@ import requests, uuid, os, json
 
 app = Flask(__name__)
 
-# ================== ENV KEYS ==================
+# KEYS
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 groq = Groq(api_key=GROQ_KEY)
 tts = ElevenLabs(api_key=ELEVEN_KEY)
 
-# ================== MEMORY ==================
-MEMORY_FILE = "memory.json"
-
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        return json.load(open(MEMORY_FILE))
-    return {"history": []}
-
-def save_memory(mem):
-    json.dump(mem, open(MEMORY_FILE, "w"))
-
-# ================== ESP STORAGE ==================
 latest_command = {"text": "", "emotion": "neutral"}
 
-# ================== TRANSLATE ==================
+# TRANSLATE
 def to_english(text):
     try:
         return translate(text, "en")
     except:
         return text
 
-# ================== SPEECH TO TEXT ==================
+# SPEECH → TEXT
 def speech_to_text(file):
     try:
         url = "https://api.groq.com/openai/v1/audio/transcriptions"
+        headers = {"Authorization": f"Bearer {GROQ_KEY}"}
 
-        headers = {
-            "Authorization": f"Bearer {GROQ_KEY}"
-        }
-
-        files = {
-            "file": open(file, "rb")
-        }
-
-        data = {
-            "model": "whisper-large-v3"
-        }
-
-        res = requests.post(url, headers=headers, files=files, data=data)
-
-        if res.status_code != 200:
-            print("Whisper Error:", res.text)
-            return ""
+        res = requests.post(
+            url,
+            headers=headers,
+            files={"file": open(file, "rb")},
+            data={"model": "whisper-large-v3"}
+        )
 
         return res.json().get("text", "")
-
-    except Exception as e:
-        print("Speech Error:", e)
+    except:
         return ""
 
-# ================== SPEECH API ==================
+# SPEECH API
 @app.route("/speech", methods=["POST"])
 def speech():
-    try:
-        file = request.files["audio"]
-        fname = f"{uuid.uuid4()}.wav"
-        file.save(fname)
+    file = request.files["audio"]
+    fname = f"{uuid.uuid4()}.wav"
+    file.save(fname)
 
-        text = speech_to_text(fname)
-        os.remove(fname)
+    text = speech_to_text(fname)
+    os.remove(fname)
 
-        if not text.strip() or text.strip() == ".":
-            text = ""
+    if not text.strip() or text.strip() == ".":
+        text = ""
 
-        return jsonify({
-            "original": text,
-            "translated": to_english(text)
-        })
+    return jsonify({
+        "original": text,
+        "translated": to_english(text)
+    })
 
-    except Exception as e:
-        print("Speech Route Error:", e)
-        return jsonify({
-            "original": "",
-            "translated": ""
-        })
-
-# ================== AI ASK ==================
+# ASK API
 @app.route("/ask", methods=["POST"])
 def ask():
     global latest_command
@@ -104,38 +72,29 @@ def ask():
                 "audio": ""
             })
 
-        # 🤖 AI CALL
+        # AI
         try:
             res = groq.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": "You are Jarvis. Reply short and natural."},
+                    {"role": "system", "content": "You are Jarvis. Reply short."},
                     {"role": "user", "content": user_text}
                 ],
                 model="moonshotai/kimi-k2-instruct-0905"
             )
-
             reply = res.choices[0].message.content
+        except:
+            reply = "AI error"
 
-        except Exception as e:
-            print("Groq Error:", e)
-            reply = "Sorry, AI is not available."
+        emotion = "neutral"
 
-        # 🧠 SIMPLE EMOTION DETECTION
-        if any(word in reply.lower() for word in ["great", "awesome", "yes"]):
-            emotion = "happy"
-        elif any(word in reply.lower() for word in ["no", "not", "error"]):
-            emotion = "sad"
-        else:
-            emotion = "neutral"
-
-        # 📡 UPDATE ESP
+        # ESP UPDATE
         latest_command = {
             "text": user_text,
             "emotion": emotion
         }
 
-        # 🔊 ELEVENLABS VOICE ID (Rachel)
-        VOICE_ID = "a1TnjruAs5jTzdrjL8Vd"
+        # ELEVENLABS VOICE ID
+        VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
 
         audio_path = ""
 
@@ -143,7 +102,7 @@ def ask():
             audio = tts.generate(
                 text=reply,
                 voice=VOICE_ID,
-                model="eleven_multilingual_v2"
+                model="eleven_monolingual_v1"
             )
 
             fname = f"{uuid.uuid4()}.mp3"
@@ -162,29 +121,27 @@ def ask():
         })
 
     except Exception as e:
-        print("ASK ERROR:", e)
+        print("Server Error:", e)
 
         return jsonify({
-            "reply": "Server error occurred",
+            "reply": "Server error",
             "emotion": "sad",
             "audio": ""
         })
 
-# ================== ESP ENDPOINT ==================
-@app.route("/esp", methods=["GET"])
+# ESP ENDPOINT
+@app.route("/esp")
 def esp():
     return jsonify(latest_command)
 
-# ================== AUDIO ==================
+# AUDIO
 @app.route("/audio/<file>")
 def audio(file):
     return send_file(file, mimetype="audio/mpeg")
 
-# ================== HEALTH ==================
 @app.route("/")
 def home():
-    return "Jarvis Server Running 🚀"
+    return "Jarvis Running 🚀"
 
-# ================== RUN ==================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
