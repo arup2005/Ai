@@ -6,16 +6,16 @@ import requests, uuid, os, json
 
 app = Flask(__name__)
 
-# ENV
+# ================== ENV KEYS ==================
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 groq = Groq(api_key=GROQ_KEY)
 tts = ElevenLabs(api_key=ELEVEN_KEY)
 
+# ================== MEMORY ==================
 MEMORY_FILE = "memory.json"
 
-# MEMORY
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         return json.load(open(MEMORY_FILE))
@@ -24,24 +24,36 @@ def load_memory():
 def save_memory(mem):
     json.dump(mem, open(MEMORY_FILE, "w"))
 
-# TRANSLATE
+# ================== ESP STORAGE ==================
+latest_command = {"text": "", "emotion": "neutral"}
+
+# ================== TRANSLATE ==================
 def to_english(text):
     try:
         return translate(text, "en")
     except:
         return text
 
-# SPEECH → TEXT (Groq Whisper API)
+# ================== SPEECH TO TEXT ==================
 def speech_to_text(file):
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
-    headers = {"Authorization": f"Bearer {GROQ_KEY}"}
-    files = {"file": open(file, "rb")}
-    data = {"model": "whisper-large-v3"}
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_KEY}"
+    }
+
+    files = {
+        "file": open(file, "rb")
+    }
+
+    data = {
+        "model": "whisper-large-v3"
+    }
 
     res = requests.post(url, headers=headers, files=files, data=data)
     return res.json()["text"]
 
-# SPEECH API
+# ================== SPEECH API ==================
 @app.route("/speech", methods=["POST"])
 def speech():
     file = request.files["audio"]
@@ -51,27 +63,38 @@ def speech():
     text = speech_to_text(fname)
     os.remove(fname)
 
+    translated = to_english(text)
+
     return jsonify({
         "original": text,
-        "translated": to_english(text)
+        "translated": translated
     })
 
-# ASK API
+# ================== AI ASK ==================
 @app.route("/ask", methods=["POST"])
 def ask():
+    global latest_command
+
     user_text = request.json["text"]
 
     memory = load_memory()
     history = memory["history"][-5:]
 
-    prompt = "You are Jarvis. Reply short with emotion JSON."
+    system_prompt = """
+You are Jarvis AI.
 
-    msgs = [{"role": "system", "content": prompt}]
-    msgs += history
-    msgs.append({"role": "user", "content": user_text})
+Respond in short natural English.
+
+ALWAYS return JSON:
+{"reply":"...", "emotion":"happy/sad/angry/neutral/excited"}
+"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += history
+    messages.append({"role": "user", "content": user_text})
 
     res = groq.chat.completions.create(
-        messages=msgs,
+        messages=messages,
         model="llama3-70b-8192"
     )
 
@@ -85,10 +108,18 @@ def ask():
     reply = data["reply"]
     emotion = data["emotion"]
 
+    # SAVE MEMORY
     memory["history"].append({"role": "user", "content": user_text})
     memory["history"].append({"role": "assistant", "content": reply})
     save_memory(memory)
 
+    # UPDATE ESP COMMAND
+    latest_command = {
+        "text": user_text,
+        "emotion": emotion
+    }
+
+    # TEXT TO SPEECH
     audio = tts.generate(text=reply, voice="Rachel")
 
     fname = f"{uuid.uuid4()}.mp3"
@@ -101,13 +132,21 @@ def ask():
         "audio": "/audio/" + fname
     })
 
+# ================== ESP ENDPOINT ==================
+@app.route("/esp", methods=["GET"])
+def esp():
+    return jsonify(latest_command)
+
+# ================== AUDIO ==================
 @app.route("/audio/<file>")
 def audio(file):
     return send_file(file, mimetype="audio/mpeg")
 
+# ================== HEALTH ==================
 @app.route("/")
 def home():
-    return "Jarvis Running 🚀"
+    return "Jarvis Server Running 🚀"
 
+# ================== RUN ==================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
