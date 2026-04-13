@@ -95,7 +95,7 @@ ALWAYS return JSON:
 
     res = groq.chat.completions.create(
         messages=messages,
-        model="meta-llama/llama-4-maverick-17b-128e-instruct"
+        model="meta-llama/llama-guard-4-12b"
     )
 
     content = res.choices[0].message.content
