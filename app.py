@@ -102,7 +102,7 @@ def ask():
             audio = tts.generate(
                 text=reply,
                 voice=VOICE_ID,
-                model="eleven_monolingual_v1"
+                model="eleven_turbo_v2"
             )
 
             fname = f"{uuid.uuid4()}.mp3"
