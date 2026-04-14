@@ -1,7 +1,13 @@
 services:
   - type: web
-    name: jarvis-ai
+    name: jarvis-ai-server
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app
+    autoDeploy: true
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ELEVEN_API_KEY
+        sync: false
