@@ -1,147 +1,121 @@
 from flask import Flask, request, jsonify, send_file
 from groq import Groq
 from elevenlabs.client import ElevenLabs
-from mtranslate import translate
-import requests, uuid, os, json
+import os
+import uuid
+import speech_recognition as sr
 
 app = Flask(__name__)
 
-# KEYS
-GROQ_KEY = os.getenv("GROQ_API_KEY")
-ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
+# ================= API KEYS =================
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+tts = ElevenLabs(api_key=os.getenv("ELEVEN_API_KEY"))
 
-groq = Groq(api_key=GROQ_KEY)
-tts = ElevenLabs(api_key=ELEVEN_KEY)
+recognizer = sr.Recognizer()
 
-latest_command = {"text": "", "emotion": "neutral"}
-
-# TRANSLATE
-def to_english(text):
+# ================= AI =================
+def generate_reply(text):
     try:
-        return translate(text, "en")
-    except:
-        return text
-
-# SPEECH → TEXT
-def speech_to_text(file):
-    try:
-        url = "https://api.groq.com/openai/v1/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {GROQ_KEY}"}
-
-        res = requests.post(
-            url,
-            headers=headers,
-            files={"file": open(file, "rb")},
-            data={"model": "whisper-large-v3"}
+        response = client.chat.completions.create(
+            model="moonshotai/kimi-k2-instruct-0905",
+            messages=[{"role": "user", "content": text}]
         )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error: {e}"
 
-        return res.json().get("text", "")
-    except:
-        return ""
-
-# SPEECH API
-@app.route("/speech", methods=["POST"])
-def speech():
-    file = request.files["audio"]
-    fname = f"{uuid.uuid4()}.wav"
-    file.save(fname)
-
-    text = speech_to_text(fname)
-    os.remove(fname)
-
-    if not text.strip() or text.strip() == ".":
-        text = ""
-
-    return jsonify({
-        "original": text,
-        "translated": to_english(text)
-    })
-
-# ASK API
-@app.route("/ask", methods=["POST"])
-def ask():
-    global latest_command
-
+# ================= SPEECH TO TEXT =================
+def speech_to_text(audio_file):
     try:
-        user_text = request.json.get("text", "")
+        with sr.AudioFile(audio_file) as source:
+            audio = recognizer.record(source)
 
-        if not user_text.strip():
-            return jsonify({
-                "reply": "I didn't hear anything.",
-                "emotion": "neutral",
-                "audio": ""
-            })
+        text = recognizer.recognize_google(audio)
+        return text.lower()
 
-        # AI
-        try:
-            res = groq.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are Jarvis. Reply short."},
-                    {"role": "user", "content": user_text}
-                ],
-                model="moonshotai/kimi-k2-instruct-0905"
-            )
-            reply = res.choices[0].message.content
-        except:
-            reply = "AI error"
+    except Exception as e:
+        return None
 
-        emotion = "neutral"
+# ================= AUDIO (TTS) =================
+def generate_audio(text):
+    filename = f"reply_{uuid.uuid4()}.mp3"
 
-        # ESP UPDATE
-        latest_command = {
-            "text": user_text,
-            "emotion": emotion
-        }
+    audio = tts.text_to_speech.convert(
+        voice_id="CwhRBWXzGAHq8TQ4Fs17",
+        model_id="eleven_multilingual_v2",
+        text=text
+    )
 
-        # ELEVENLABS VOICE ID
-        VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+    with open(filename, "wb") as f:
+        f.write(b"".join(audio))
 
-        audio_path = ""
+    return filename
 
-        try:
-            audio = tts.generate(
-                text=reply,
-                voice=VOICE_ID,
-                model="eleven_multilingual_v2"
-            )
+# ================= TEXT COMMAND API =================
+@app.route("/command", methods=["POST"])
+def command():
+    try:
+        data = request.get_json()
 
-            fname = f"{uuid.uuid4()}.mp3"
-            with open(fname, "wb") as f:
-                f.write(audio)
+        if not data or "text" not in data:
+            return jsonify({"error": "No text provided"}), 400
 
-            audio_path = "/audio/" + fname
+        text = data.get("text").strip()
 
-        except Exception as e:
-            print("TTS Error:", e)
+        reply = generate_reply(text)
+        audio_file = generate_audio(reply)
+
+        base_url = request.host_url.rstrip("/")
 
         return jsonify({
+            "input": text,
             "reply": reply,
-            "emotion": emotion,
-            "audio": audio_path
+            "audio_url": f"{base_url}/audio/{audio_file}"
         })
 
     except Exception as e:
-        print("Server Error:", e)
+        return jsonify({"error": str(e)}), 500
+
+# ================= VOICE COMMAND API =================
+@app.route("/voice", methods=["POST"])
+def voice_command():
+    try:
+        if "file" not in request.files:
+            return jsonify({"error": "No audio file"}), 400
+
+        file = request.files["file"]
+
+        filename = f"input_{uuid.uuid4()}.wav"
+        file.save(filename)
+
+        # 🎤 Convert speech to text
+        text = speech_to_text(filename)
+
+        if not text:
+            return jsonify({"error": "Could not understand audio"}), 400
+
+        # 🤖 AI reply
+        reply = generate_reply(text)
+
+        # 🔊 Generate voice
+        audio_file = generate_audio(reply)
+
+        base_url = request.host_url.rstrip("/")
 
         return jsonify({
-            "reply": "Server error",
-            "emotion": "sad",
-            "audio": ""
+            "input": text,
+            "reply": reply,
+            "audio_url": f"{base_url}/audio/{audio_file}"
         })
 
-# ESP ENDPOINT
-@app.route("/esp")
-def esp():
-    return jsonify(latest_command)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# AUDIO
-@app.route("/audio/<file>")
-def audio(file):
-    return send_file(file, mimetype="audio/mpeg")
+# ================= AUDIO ROUTE =================
+@app.route("/audio/<filename>")
+def serve_audio(filename):
+    return send_file(filename, mimetype="audio/mpeg")
 
-@app.route("/")
-def home():
-    return "Jarvis Running 🚀"
-
+# ================= RUN =================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=5000)
